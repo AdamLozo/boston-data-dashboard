@@ -1,0 +1,34 @@
+databases:
+  - name: boston-dashboard-db
+    databaseName: boston_permits
+    user: dashboard
+    plan: starter
+
+services:
+  - type: web
+    name: boston-data-dashboard
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: boston-dashboard-db
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: "3.11"
+    autoDeploy: true
+
+  - type: cron
+    name: boston-dashboard-sync
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    schedule: "0 11 * * *"
+    startCommand: python -m backend.sync_job
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: boston-dashboard-db
+          property: connectionString
+      - key: SYNC_DAYS_BACK
+        value: "90"

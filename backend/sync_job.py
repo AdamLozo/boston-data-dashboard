@@ -1,0 +1,186 @@
+"""
+Boston Data Dashboard - Data Sync Job
+Fetches recent permits from Analyze Boston CKAN API and updates PostgreSQL database
+"""
+
+import requests
+from datetime import datetime, timedelta
+import sys
+import logging
+
+from .config import settings
+from .database import (
+    get_db_connection,
+    init_db,
+    upsert_permit,
+    create_sync_log,
+    update_sync_log
+)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+def fetch_permits_from_ckan(days: int = 90, limit: int = 10000) -> list:
+    """
+    Fetch permits from Analyze Boston CKAN API.
+    Uses SQL endpoint for date filtering.
+    """
+    cutoff_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    sql = f'''
+        SELECT * FROM "{settings.CKAN_RESOURCE_ID}"
+        WHERE "issued_date" >= '{cutoff_date}'
+        ORDER BY "issued_date" DESC
+        LIMIT {limit}
+    '''
+
+    logger.info(f"Fetching permits issued since {cutoff_date} (last {days} days)")
+
+    try:
+        response = requests.get(
+            settings.CKAN_SQL_API_URL,
+            params={"sql": sql},
+            timeout=120
+        )
+        response.raise_for_status()
+
+        result = response.json()
+
+        if not result.get("success"):
+            error = result.get("error", {})
+            error_msg = error.get("message", "Unknown API error")
+            raise Exception(f"CKAN API error: {error_msg}")
+
+        records = result["result"]["records"]
+        logger.info(f"Successfully fetched {len(records)} permits from API")
+        return records
+
+    except requests.exceptions.Timeout:
+        logger.error("Request to CKAN API timed out")
+        raise
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Network error fetching from CKAN API: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching permits: {e}")
+        raise
+
+
+def sync_permits(days: int = None) -> dict:
+    """
+    Main sync function - fetch permits from CKAN and upsert to database.
+    Returns dict with sync statistics.
+    """
+    if days is None:
+        days = settings.SYNC_DAYS_BACK
+
+    logger.info(f"Starting sync job at {datetime.now().isoformat()}")
+    logger.info(f"Syncing permits from last {days} days")
+
+    # Initialize database if needed
+    try:
+        init_db()
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        raise
+
+    with get_db_connection() as conn:
+        # Create sync log entry
+        sync_id = create_sync_log(conn)
+        logger.info(f"Created sync log entry with ID: {sync_id}")
+
+        inserted_count = 0
+        updated_count = 0
+        records = []
+
+        try:
+            # Fetch from CKAN API
+            records = fetch_permits_from_ckan(days=days)
+
+            # Process each record
+            for i, record in enumerate(records, 1):
+                try:
+                    was_inserted, permit_number = upsert_permit(conn, record)
+
+                    if was_inserted:
+                        inserted_count += 1
+                    else:
+                        updated_count += 1
+
+                    # Log progress every 100 records
+                    if i % 100 == 0:
+                        logger.info(f"Processed {i}/{len(records)} records")
+
+                except Exception as e:
+                    logger.warning(f"Failed to upsert permit {record.get('permitnumber')}: {e}")
+                    continue
+
+            # Commit all changes
+            conn.commit()
+
+            # Update sync log with success
+            update_sync_log(
+                conn,
+                sync_id,
+                records_fetched=len(records),
+                records_inserted=inserted_count,
+                records_updated=updated_count,
+                status="success"
+            )
+
+            logger.info(
+                f"Sync completed successfully: "
+                f"{inserted_count} inserted, {updated_count} updated, "
+                f"{len(records)} total fetched"
+            )
+
+            return {
+                "status": "success",
+                "fetched": len(records),
+                "inserted": inserted_count,
+                "updated": updated_count
+            }
+
+        except Exception as e:
+            # Rollback on error
+            conn.rollback()
+
+            # Update sync log with error
+            update_sync_log(
+                conn,
+                sync_id,
+                records_fetched=len(records),
+                records_inserted=inserted_count,
+                records_updated=updated_count,
+                status="error",
+                error_message=str(e)
+            )
+
+            logger.error(f"Sync failed: {e}")
+            raise
+
+
+if __name__ == "__main__":
+    # Allow overriding days via command line argument
+    # Usage: python -m backend.sync_job [days]
+    days = None
+    if len(sys.argv) > 1:
+        try:
+            days = int(sys.argv[1])
+            logger.info(f"Using command-line override: syncing {days} days")
+        except ValueError:
+            logger.error(f"Invalid days argument: {sys.argv[1]}")
+            sys.exit(1)
+
+    try:
+        result = sync_permits(days=days)
+        logger.info(f"Sync result: {result}")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"Sync job failed: {e}")
+        sys.exit(1)

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Boston Building Permits Dashboard</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f5f5f5; }
+        .header { background-color: #2c3e50; color: white; padding: 1rem 2rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .header h1 { font-size: 1.5rem; font-weight: 600; }
+        .header .subtitle { font-size: 0.875rem; color: #bdc3c7; margin-top: 0.25rem; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 1.5rem; }
+        .filters { background: white; padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .filters-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1rem; }
+        .filter-group { display: flex; flex-direction: column; }
+        .filter-group label { font-size: 0.875rem; font-weight: 500; color: #555; margin-bottom: 0.5rem; }
+        .filter-group select { padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.875rem; }
+        .stats-bar { display: flex; gap: 2rem; padding-top: 1rem; border-top: 1px solid #eee; font-size: 0.875rem; }
+        .stat-value { font-size: 1.25rem; font-weight: 600; color: #2c3e50; }
+        .stat-label { color: #999; font-size: 0.75rem; text-transform: uppercase; }
+        #map { height: 600px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .loading { text-align: center; padding: 2rem; color: #666; }
+        .permit-popup strong { font-size: 1rem; color: #2c3e50; }
+        .permit-popup .value { color: #27ae60; font-weight: 600; }
+        @media (max-width: 768px) {
+            .container { padding: 1rem; }
+            .filters-grid { grid-template-columns: 1fr; }
+            .stats-bar { flex-direction: column; gap: 1rem; }
+            #map { height: 400px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Boston Building Permits Dashboard</h1>
+        <div class="subtitle">Real-time tracking of building permits across Boston neighborhoods</div>
+    </div>
+    <div class="container">
+        <div class="filters">
+            <div class="filters-grid">
+                <div class="filter-group"><label for="zip-filter">ZIP Code</label><select id="zip-filter"><option value="">All ZIP Codes</option></select></div>
+                <div class="filter-group"><label for="work-type-filter">Work Type</label><select id="work-type-filter"><option value="">All Types</option></select></div>
+                <div class="filter-group"><label for="days-filter">Time Period</label><select id="days-filter"><option value="7">Last 7 Days</option><option value="14">Last 14 Days</option><option value="30" selected>Last 30 Days</option><option value="60">Last 60 Days</option><option value="90">Last 90 Days</option></select></div>
+            </div>
+            <div class="stats-bar">
+                <div class="stat"><div class="stat-value" id="total-permits">-</div><div class="stat-label">Total Permits</div></div>
+                <div class="stat"><div class="stat-value" id="total-value">-</div><div class="stat-label">Total Value</div></div>
+                <div class="stat"><div class="stat-value" id="last-sync">-</div><div class="stat-label">Last Updated</div></div>
+            </div>
+        </div>
+        <div id="map"></div>
+        <div class="loading" id="loading">Loading permits data...</div>
+    </div>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+    <script>
+const map=L.map('map').setView([42.3601,-71.0589],12);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OpenStreetMap'}).addTo(map);
+const markers=L.markerClusterGroup({maxClusterRadius:50});map.addLayer(markers);
+function fmt$(v){return v?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:0}).format(v):'N/A';}
+function fmtDate(d){return d?new Date(d).toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'}):'N/A';}
+function popup(p){return`<strong>${p.address}</strong><br><strong>${p.work_type_label}</strong> - ${p.permit_number}<br>Issued: ${fmtDate(p.issued_date)}<br>Value: <span class="value">${fmt$(p.declared_valuation)}</span><br>Status: ${p.status}`;}
+function addMarkers(ps){markers.clearLayers();ps.forEach(p=>{if(p.latitude&&p.longitude){const m=L.marker([p.latitude,p.longitude]);m.bindPopup(popup(p));markers.addLayer(m);}});document.getElementById('loading').style.display='none';}
+async function load(){const z=document.getElementById('zip-filter').value,w=document.getElementById('work-type-filter').value,d=document.getElementById('days-filter').value;const p=new URLSearchParams({days:d,limit:1000});if(z)p.append('zip',z);if(w)p.append('work_type',w);document.getElementById('loading').style.display='block';try{const r=await fetch(`/api/permits?${p}`),data=await r.json();addMarkers(data.data);document.getElementById('total-permits').textContent=data.total.toLocaleString();}catch(e){console.error(e);document.getElementById('loading').textContent='Error';}}
+async function loadStats(){const d=document.getElementById('days-filter').value;try{const r=await fetch(`/api/stats?days=${d}`),data=await r.json();document.getElementById('total-value').textContent=fmt$(data.total_valuation);}catch(e){console.error(e);}}
+async function loadHealth(){try{const r=await fetch('/api/health'),d=await r.json();if(d.last_sync){const h=Math.round(d.hours_since_sync);document.getElementById('last-sync').textContent=h===0?'Just now':`${h}h ago`;}}catch(e){console.error(e);}}
+async function loadFilters(){try{const r=await fetch('/api/neighborhoods'),d=await r.json(),sel=document.getElementById('zip-filter');d.data.forEach(i=>{const o=document.createElement('option');o.value=i.zip;o.textContent=`${i.zip} (${i.count})`;sel.appendChild(o);});}catch(e){console.error(e);}try{const r=await fetch('/api/work-types'),d=await r.json(),sel=document.getElementById('work-type-filter');d.data.forEach(i=>{const o=document.createElement('option');o.value=i.code;o.textContent=i.label;sel.appendChild(o);});}catch(e){console.error(e);}}
+document.getElementById('zip-filter').addEventListener('change',()=>{load();loadStats();});
+document.getElementById('work-type-filter').addEventListener('change',()=>{load();loadStats();});
+document.getElementById('days-filter').addEventListener('change',()=>{load();loadStats();});
+(async()=>{await loadFilters();await load();await loadStats();await loadHealth();})();
+    </script>
+</body>
+</html>
