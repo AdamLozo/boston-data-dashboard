@@ -2,7 +2,7 @@ databases:
   - name: boston-dashboard-db
     databaseName: boston_permits
     user: dashboard
-    plan: starter
+    plan: free
 
 services:
   - type: web
