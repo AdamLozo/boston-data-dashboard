@@ -14,7 +14,10 @@
       "Bash(dir:*)",
       "Bash(start:*)",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''COMMITMSG''\nInitial commit: Boston Building Permits Dashboard\n\n- PostgreSQL database with permits and sync_log tables\n- FastAPI backend with 6 API endpoints\n- CKAN API integration for daily permit sync\n- Leaflet.js frontend with interactive map and filters\n- Responsive mobile-first design\n- Render deployment configuration\n\nMilestone 1 complete: Local prototype fully functional\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nCOMMITMSG\n\\)\")",
+      "Bash(gh repo create:*)",
+      "Bash(git commit:*)"
     ]
   }
 }
