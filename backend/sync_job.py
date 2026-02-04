@@ -25,10 +25,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def fetch_permits_from_ckan(days: int = 90, limit: int = 10000) -> list:
+def fetch_permits_from_ckan(days: int = 90, limit: int = 10000, offset: int = 0) -> list:
     """
     Fetch permits from Analyze Boston CKAN API.
-    Uses SQL endpoint for date filtering.
+    Uses SQL endpoint for date filtering with pagination support.
+
+    Args:
+        days: Number of days back to fetch
+        limit: Max records per request (CKAN max is 32000)
+        offset: Starting record for pagination
     """
     cutoff_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
@@ -36,10 +41,10 @@ def fetch_permits_from_ckan(days: int = 90, limit: int = 10000) -> list:
         SELECT * FROM "{settings.CKAN_RESOURCE_ID}"
         WHERE "issued_date" >= '{cutoff_date}'
         ORDER BY "issued_date" DESC
-        LIMIT {limit}
+        LIMIT {limit} OFFSET {offset}
     '''
 
-    logger.info(f"Fetching permits issued since {cutoff_date} (last {days} days)")
+    logger.info(f"Fetching permits issued since {cutoff_date} (last {days} days) - offset {offset}")
 
     try:
         response = requests.get(
@@ -69,6 +74,45 @@ def fetch_permits_from_ckan(days: int = 90, limit: int = 10000) -> list:
     except Exception as e:
         logger.error(f"Error fetching permits: {e}")
         raise
+
+
+def fetch_all_permits_paginated(days: int = 90, batch_size: int = 10000) -> list:
+    """
+    Fetch all permits for a date range using pagination.
+    Continues fetching until no more records are returned.
+
+    Args:
+        days: Number of days back to fetch
+        batch_size: Records per API call (max 32000 for CKAN)
+
+    Returns:
+        List of all permit records
+    """
+    all_records = []
+    offset = 0
+
+    while True:
+        batch = fetch_permits_from_ckan(days=days, limit=batch_size, offset=offset)
+
+        if not batch:
+            logger.info(f"No more records found. Total fetched: {len(all_records)}")
+            break
+
+        all_records.extend(batch)
+        offset += len(batch)
+
+        logger.info(f"Fetched batch of {len(batch)} records. Total so far: {len(all_records)}")
+
+        # If we got fewer records than requested, we've reached the end
+        if len(batch) < batch_size:
+            logger.info(f"Received fewer than {batch_size} records. Pagination complete.")
+            break
+
+        # Add a small delay between requests to be respectful to the API
+        import time
+        time.sleep(1)
+
+    return all_records
 
 
 def sync_permits(days: int = None) -> dict:
