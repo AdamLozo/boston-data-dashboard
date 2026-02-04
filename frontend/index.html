@@ -24,8 +24,10 @@
         .stat-label { color: #999; font-size: 0.75rem; text-transform: uppercase; }
         #map { height: 600px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
         .loading { text-align: center; padding: 2rem; color: #666; }
-        .permit-popup strong { font-size: 1rem; color: #2c3e50; }
+        .permit-popup { max-width: 300px; line-height: 1.5; }
+        .permit-popup strong { font-size: 0.875rem; color: #2c3e50; }
         .permit-popup .value { color: #27ae60; font-weight: 600; }
+        .leaflet-popup-content { max-height: 400px; overflow-y: auto; }
         @media (max-width: 768px) {
             .container { padding: 1rem; }
             .filters-grid { grid-template-columns: 1fr; }
@@ -62,13 +64,73 @@ const map=L.map('map').setView([42.3601,-71.0589],12);L.tileLayer('https://{s}.t
 const markers=L.markerClusterGroup({maxClusterRadius:50});map.addLayer(markers);
 function fmt$(v){return v?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:0}).format(v):'N/A';}
 function fmtDate(d){return d?new Date(d).toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'}):'N/A';}
-function popup(p){return`<strong>${p.address}</strong><br><strong>${p.work_type_label}</strong> - ${p.permit_number}<br>Issued: ${fmtDate(p.issued_date)}<br>Value: <span class="value">${fmt$(p.declared_valuation)}</span><br>Status: ${p.status}`;}
+// ZIP code boundaries for Boston (approximate center points and zoom level)
+const zipBounds={
+  '02108':{center:[42.3601,-71.0589],zoom:15},
+  '02109':{center:[42.3647,-71.0542],zoom:15},
+  '02110':{center:[42.3558,-71.0528],zoom:15},
+  '02111':{center:[42.3504,-71.0626],zoom:15},
+  '02113':{center:[42.3647,-71.0587],zoom:15},
+  '02114':{center:[42.3610,-71.0678],zoom:15},
+  '02115':{center:[42.3429,-71.0870],zoom:15},
+  '02116':{center:[42.3493,-71.0765],zoom:15},
+  '02118':{center:[42.3409,-71.0698],zoom:15},
+  '02119':{center:[42.3258,-71.0832],zoom:15},
+  '02120':{center:[42.3318,-71.0988],zoom:15},
+  '02121':{center:[42.3063,-71.0831],zoom:15},
+  '02122':{center:[42.2917,-71.0492],zoom:15},
+  '02124':{center:[42.2845,-71.0718],zoom:15},
+  '02125':{center:[42.3139,-71.0646],zoom:15},
+  '02126':{center:[42.2695,-71.1240],zoom:15},
+  '02127':{center:[42.3324,-71.0427],zoom:15},
+  '02128':{center:[42.3657,-71.0296],zoom:14},
+  '02129':{center:[42.3788,-71.0636],zoom:15},
+  '02130':{center:[42.3099,-71.1161],zoom:15},
+  '02131':{center:[42.2838,-71.1271],zoom:15},
+  '02132':{center:[42.2759,-71.1567],zoom:15},
+  '02134':{center:[42.3531,-71.1392],zoom:15},
+  '02135':{center:[42.3499,-71.1521],zoom:15},
+  '02136':{center:[42.2553,-71.1286],zoom:15},
+  '02163':{center:[42.3555,-71.0620],zoom:15},
+  '02199':{center:[42.3467,-71.0818],zoom:15},
+  '02203':{center:[42.3485,-71.0768],zoom:15},
+  '02210':{center:[42.3485,-71.0413],zoom:15},
+  '02215':{center:[42.3481,-71.1038],zoom:15}
+};
+function popup(p){
+  let html=`<div class="permit-popup"><strong>${p.address||'No address'}</strong><br>`;
+  html+=`<strong>Permit:</strong> ${p.permit_number||'N/A'}<br>`;
+  if(p.work_type_label)html+=`<strong>Work Type:</strong> ${p.work_type_label}<br>`;
+  if(p.permit_type_descr)html+=`<strong>Type:</strong> ${p.permit_type_descr}<br>`;
+  if(p.description)html+=`<strong>Description:</strong> ${p.description}<br>`;
+  if(p.applicant)html+=`<strong>Applicant:</strong> ${p.applicant}<br>`;
+  html+=`<strong>Issued:</strong> ${fmtDate(p.issued_date)}<br>`;
+  if(p.expiration_date)html+=`<strong>Expires:</strong> ${fmtDate(p.expiration_date)}<br>`;
+  html+=`<strong>Status:</strong> ${p.status||'N/A'}<br>`;
+  if(p.declared_valuation)html+=`<strong>Value:</strong> <span class="value">${fmt$(p.declared_valuation)}</span><br>`;
+  if(p.total_fees)html+=`<strong>Fees:</strong> ${fmt$(p.total_fees)}<br>`;
+  if(p.sq_feet)html+=`<strong>Sq Feet:</strong> ${p.sq_feet.toLocaleString()}<br>`;
+  if(p.occupancy_type)html+=`<strong>Occupancy:</strong> ${p.occupancy_type}<br>`;
+  if(p.ward)html+=`<strong>Ward:</strong> ${p.ward}<br>`;
+  if(p.zip)html+=`<strong>ZIP:</strong> ${p.zip}<br>`;
+  if(p.comments)html+=`<strong>Comments:</strong> ${p.comments}<br>`;
+  html+=`</div>`;
+  return html;
+}
 function addMarkers(ps){markers.clearLayers();ps.forEach(p=>{if(p.latitude&&p.longitude){const m=L.marker([p.latitude,p.longitude]);m.bindPopup(popup(p));markers.addLayer(m);}});document.getElementById('loading').style.display='none';}
 async function load(){const z=document.getElementById('zip-filter').value,w=document.getElementById('work-type-filter').value,d=document.getElementById('days-filter').value;const p=new URLSearchParams({days:d,limit:1000});if(z)p.append('zip',z);if(w)p.append('work_type',w);document.getElementById('loading').style.display='block';try{const r=await fetch(`/api/permits?${p}`),data=await r.json();addMarkers(data.data);document.getElementById('total-permits').textContent=data.total.toLocaleString();}catch(e){console.error(e);document.getElementById('loading').textContent='Error';}}
 async function loadStats(){const d=document.getElementById('days-filter').value;try{const r=await fetch(`/api/stats?days=${d}`),data=await r.json();document.getElementById('total-value').textContent=fmt$(data.total_valuation);}catch(e){console.error(e);}}
 async function loadHealth(){try{const r=await fetch('/api/health'),d=await r.json();if(d.last_sync){const h=Math.round(d.hours_since_sync);document.getElementById('last-sync').textContent=h===0?'Just now':`${h}h ago`;}}catch(e){console.error(e);}}
 async function loadFilters(){try{const r=await fetch('/api/neighborhoods'),d=await r.json(),sel=document.getElementById('zip-filter');d.data.forEach(i=>{const o=document.createElement('option');o.value=i.zip;o.textContent=`${i.zip} (${i.count})`;sel.appendChild(o);});}catch(e){console.error(e);}try{const r=await fetch('/api/work-types'),d=await r.json(),sel=document.getElementById('work-type-filter');d.data.forEach(i=>{const o=document.createElement('option');o.value=i.code;o.textContent=i.label;sel.appendChild(o);});}catch(e){console.error(e);}}
-document.getElementById('zip-filter').addEventListener('change',()=>{load();loadStats();});
+document.getElementById('zip-filter').addEventListener('change',()=>{
+  const zip=document.getElementById('zip-filter').value;
+  if(zip&&zipBounds[zip]){
+    map.setView(zipBounds[zip].center,zipBounds[zip].zoom);
+  }else{
+    map.setView([42.3601,-71.0589],12);
+  }
+  load();loadStats();
+});
 document.getElementById('work-type-filter').addEventListener('change',()=>{load();loadStats();});
 document.getElementById('days-filter').addEventListener('change',()=>{load();loadStats();});
 (async()=>{await loadFilters();await load();await loadStats();await loadHealth();})();
